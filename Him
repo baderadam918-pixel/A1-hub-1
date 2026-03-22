@@ -9,7 +9,7 @@ local LocalPlayer = Players.LocalPlayer
 
 -- [[ CLEANUP ]] --
 local function fullCleanup()
-    local names = {"A1_DuelHelper", "A1_DuelUI_TopPosition", "A1_HUD", "A1_MovementGUI", "A1_TpPicker", "A1_AutoGrab", "A1_Menu", "A1_SpeedDisplay"}
+    local names = {"A1_DuelHelper", "A1_DuelUI_TopPosition", "A1_HUD", "A1_MovementGUI", "A1_TpPicker", "A1_AutoGrab", "A1_Menu", "A1_ExtraMenu", "A1_SpeedDisplay"}
     for _, name in ipairs(names) do
         if CoreGui:FindFirstChild(name) then CoreGui[name]:Destroy() end
     end
@@ -48,10 +48,24 @@ local SETTINGS = {
     SPEED_ENABLED = true, LOCK_ENABLED = false, RADIUS = 30, STEAL_DURATION = 0.2,
     TARGET_SPEED = 60, LOCK_SPEED = 58, JUMP_FORCE = 50, UNWALK = false,
     SPIN_ENABLED = false, SPIN_SPEED = 100, STEAL_SPEED = 29.40,
-    SPAM_ENABLED = false
+    SPAM_ENABLED = false,
+    FLOAT_ENABLED = false,
+    FLOAT_HEIGHT = 6.5,
+    CARRY_MODE = false,
+    TP_DOWN = false
 }
 
-local SAVE_KEYS = {"ENABLED","DROP","AUTOLEFT","AUTORIGHT","LOCK_ENABLED","RADIUS","STEAL_DURATION","TARGET_SPEED","LOCK_SPEED","JUMP_FORCE","SPIN_ENABLED","SPIN_SPEED","UNWALK","STEAL_SPEED"}
+-- Keybind settings (default None)
+local KEYBINDS = {
+    LOCK = nil,
+    DROP = nil,
+    AUTOLEFT = nil,
+    AUTORIGHT = nil,
+    FLOAT = nil,
+    TPDOWN = nil
+}
+
+local SAVE_KEYS = {"ENABLED","DROP","AUTOLEFT","AUTORIGHT","LOCK_ENABLED","RADIUS","STEAL_DURATION","TARGET_SPEED","LOCK_SPEED","JUMP_FORCE","SPIN_ENABLED","SPIN_SPEED","UNWALK","STEAL_SPEED","SPAM_ENABLED","FLOAT_ENABLED","FLOAT_HEIGHT","CARRY_MODE"}
 local SAVE_KEY = "A1_Config"
 local MENU_SAVE_KEY = "A1_MenuConfig"
 
@@ -63,11 +77,10 @@ local allButtons = {}
 local savedPositions = {}
 
 local DEFAULT_POSITIONS = {
-    AutoGrab  = UDim2.new(0.5, 130,  1, -105), Speed     = UDim2.new(0.5, -230, 1, -105),
     Tp        = UDim2.new(0.5, 130,  1, -155), Save      = UDim2.new(0,   8,    0, 8),
     ResetTp   = UDim2.new(0,   96,   0, 8),    TpAuto    = UDim2.new(0,   192,  0, 8),
     Lag       = UDim2.new(0.5, 10,   1, -205), MenuBtn   = UDim2.new(0.5, -55,  1, -205),
-    SpamBtn   = UDim2.new(0.5, -55,  0, 45)
+    ExtraBtn  = UDim2.new(0.5, 60,   1, -205), CarryBtn  = UDim2.new(0.5, -40,  0, 40)
 }
 
 local L_POS_1, L_POS_END, L_POS_RETURN, L_POS_FINAL = Vector3.new(-476.48, -6.28, 92.73), Vector3.new(-483.12, -4.95, 94.80), Vector3.new(-475, -8, 19), Vector3.new(-488, -6, 19)
@@ -77,10 +90,21 @@ local TP_RIGHT_1, TP_RIGHT_2 = Vector3.new(-473, -8, 25), Vector3.new(-483, -6, 
 
 -- [[ SAVE SYSTEM ]] --
 local function saveConfig()
-    local data = {tpSide = tpSide or "NONE", positions = {}}
+    local data = {tpSide = tpSide or "NONE", positions = {}, keybinds = {}}
     for _, k in ipairs(SAVE_KEYS) do data[k] = SETTINGS[k] end
     for name, btn in pairs(allButtons) do
         data.positions[name] = {xs = btn.Position.X.Scale, xo = btn.Position.X.Offset, ys = btn.Position.Y.Scale, yo = btn.Position.Y.Offset}
+    end
+    if MoveFrame then
+        data.positions["MovementGUI"] = {
+            xs = MoveFrame.Position.X.Scale,
+            xo = MoveFrame.Position.X.Offset,
+            ys = MoveFrame.Position.Y.Scale,
+            yo = MoveFrame.Position.Y.Offset
+        }
+    end
+    for k, v in pairs(KEYBINDS) do
+        if v then data.keybinds[k] = v end
     end
     pcall(function() writefile(SAVE_KEY .. ".json", HttpService:JSONEncode(data)) end)
 end
@@ -92,6 +116,9 @@ local function loadConfig()
             for _, k in ipairs(SAVE_KEYS) do if result[k] ~= nil then SETTINGS[k] = result[k] end end
             if result.tpSide and result.tpSide ~= "NONE" then tpSide = result.tpSide end
             if result.positions then savedPositions = result.positions end
+            if result.keybinds then
+                for k, v in pairs(result.keybinds) do KEYBINDS[k] = v end
+            end
         end
     end)
 end
@@ -217,7 +244,9 @@ local function startAutoSwing()
     autoSwingActive = true
     task.spawn(function()
         while autoSwingActive and SETTINGS.LOCK_ENABLED do
-            equipBat(); silentSwing(); task.wait(0.35)
+            equipBat()
+            silentSwing()
+            task.wait(math.random(30, 50) / 100)
         end
         autoSwingActive = false
     end)
@@ -253,6 +282,47 @@ RunService.PreSimulation:Connect(function()
         end
     end
 end)
+
+-- [[ TP DOWN ACTION ]] --
+local function tpDownAction()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local rootPart = char:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return end
+
+    local rayOrigin = rootPart.Position
+    local rayDirection = Vector3.new(0, -500, 0)
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {char}
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+
+    local result = workspace:Raycast(rayOrigin, rayDirection, raycastParams)
+    if result then
+        local groundPos = result.Position + Vector3.new(0, 3, 0)
+        rootPart.CFrame = CFrame.new(groundPos)
+    else
+        warn("No ground found below")
+    end
+end
+
+-- [[ DROP ACTION ]] --
+local function dropAction()
+    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        task.wait(math.random(5, 15) / 100)
+        hrp.AssemblyLinearVelocity = Vector3.new(0, 150, 0)
+        task.wait(0.2)
+        hrp.AssemblyLinearVelocity = Vector3.new(math.random(-10, 10), -800, math.random(-10, 10))
+    end
+    if SETTINGS.AUTOLEFT then
+        SETTINGS.AUTOLEFT = false
+        if setAutoLeftState then setAutoLeftState(false) end
+    end
+    if SETTINGS.AUTORIGHT then
+        SETTINGS.AUTORIGHT = false
+        if setAutoRightState then setAutoRightState(false) end
+    end
+end
 
 -- [[ VISUALS: RADIUS ]] --
 local circlePart = Instance.new("Part", workspace); circlePart.Name = "RadiusCircle"; circlePart.Anchored = true; circlePart.CanCollide = false; circlePart.CanTouch = false; circlePart.Transparency = 0.3; circlePart.Color = Color3.fromRGB(0, 120, 255); circlePart.Material = Enum.Material.Neon
@@ -296,7 +366,9 @@ local function startStealLoop(prompt)
         local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
         local pos = getPromptPos(prompt)
         if not hrp or not pos or (hrp.Position - pos).Magnitude > SETTINGS.RADIUS then resetBar(); return end
-        fireproximityprompt(prompt); task.wait(0.05); fireproximityprompt(prompt)
+        pcall(function() fireproximityprompt(prompt) end)
+        task.wait(0.05)
+        pcall(function() fireproximityprompt(prompt) end)
         resetBar()
     end)
 end
@@ -305,64 +377,332 @@ end
 local TitleBox = Instance.new("Frame", HUDScreen); TitleBox.Size = UDim2.new(0, 160, 0, 28); TitleBox.Position = UDim2.new(0.5, -80, 0, 8); TitleBox.BackgroundColor3 = Color3.fromRGB(5, 15, 30); Instance.new("UICorner", TitleBox).CornerRadius = UDim.new(0, 8); AddOutline(TitleBox)
 local TitleLabel = Instance.new("TextLabel", TitleBox); TitleLabel.Size = UDim2.new(1, 0, 1, 0); TitleLabel.BackgroundTransparency = 1; TitleLabel.Text = "A1 HUB"; TitleLabel.TextColor3 = Color3.fromRGB(255, 255, 255); TitleLabel.Font = Enum.Font.GothamBold; TitleLabel.TextSize = 13
 
-local function MakeHUDButton(name, label, onToggle)
-    local btn = Instance.new("TextButton", HUDScreen); btn.Size = UDim2.new(0, 110, 0, 38); btn.Position = resolvePosition(name); btn.BackgroundColor3 = Color3.fromRGB(10, 25, 50); btn.Text = label .. "\nOFF"; btn.TextColor3 = Color3.fromRGB(200, 200, 200); btn.Font = Enum.Font.GothamBold; btn.TextSize = 11; Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8); AddOutline(btn); allButtons[name] = btn
-    local active = false
-    MakeDraggable(btn, function()
-        active = not active; onToggle(active)
-        btn.Text = label .. "\n" .. (active and "ON" or "OFF"); btn.BackgroundColor3 = active and Color3.fromRGB(20, 80, 150) or Color3.fromRGB(10, 25, 50); btn.TextColor3 = active and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 200, 200)
-    end)
-    local function forceState(s) active = s; btn.Text = label .. "\n" .. (s and "ON" or "OFF"); btn.BackgroundColor3 = s and Color3.fromRGB(20, 80, 150) or Color3.fromRGB(10, 25, 50); btn.TextColor3 = s and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 200, 200) end
-    return btn, forceState
-end
-
-local AutoGrabHUD, setAutoGrabState = MakeHUDButton("AutoGrab", "AUTO GRAB", function(on) SETTINGS.ENABLED = on; if not on then resetBar() end end)
-local SpeedHUD, setSpeedState = MakeHUDButton("Speed", "SPEED", function(on) SETTINGS.SPEED_ENABLED = on end)
-setSpeedState(SETTINGS.SPEED_ENABLED)
-local SpamBtnHUD, setSpamState = MakeHUDButton("SpamBtn", "SPAM", function(on) SETTINGS.SPAM_ENABLED = on end)
+-- Carry Mode button
+local CarryBtn = Instance.new("TextButton", HUDScreen); CarryBtn.Size = UDim2.new(0, 110, 0, 38); CarryBtn.Position = resolvePosition("CarryBtn"); CarryBtn.BackgroundColor3 = Color3.fromRGB(10, 25, 50); CarryBtn.Text = "CARRY MODE\nOFF"; CarryBtn.TextColor3 = Color3.fromRGB(200, 200, 200); CarryBtn.Font = Enum.Font.GothamBold; CarryBtn.TextSize = 11; Instance.new("UICorner", CarryBtn).CornerRadius = UDim.new(0, 8); AddOutline(CarryBtn); allButtons["CarryBtn"] = CarryBtn
+MakeDraggable(CarryBtn, function()
+    SETTINGS.CARRY_MODE = not SETTINGS.CARRY_MODE
+    CarryBtn.Text = "CARRY MODE\n" .. (SETTINGS.CARRY_MODE and "ON" or "OFF")
+    CarryBtn.BackgroundColor3 = SETTINGS.CARRY_MODE and Color3.fromRGB(20, 80, 150) or Color3.fromRGB(10, 25, 50)
+    CarryBtn.TextColor3 = SETTINGS.CARRY_MODE and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 200, 200)
+    saveConfig()
+end)
 
 -- [[ SPAM SYSTEM ]] --
 task.spawn(function()
     while task.wait(0.7) do 
         if SETTINGS.SPAM_ENABLED then
             local msg = "/A1 HUB ON TOP"
-            if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
-                local channel = TextChatService.TextChannels:FindFirstChild("RBXGeneral")
-                if channel then channel:SendAsync(msg) end
-            else
-                game:GetService("ReplicatedStorage").DefaultChatSystemChatEvents.SayMessageRequest:FireServer(msg, "All")
+            pcall(function()
+                if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+                    local channel = TextChatService.TextChannels:FindFirstChild("RBXGeneral")
+                    if channel then channel:SendAsync(msg) end
+                else
+                    game:GetService("ReplicatedStorage").DefaultChatSystemChatEvents.SayMessageRequest:FireServer(msg, "All")
+                end
+            end)
+        end
+    end
+end)
+
+-- [[ FLOATING SYSTEM (BodyPosition) ]] --
+local floatBodyPosition = nil
+
+local function updateFloat()
+    if not SETTINGS.FLOAT_ENABLED then
+        if floatBodyPosition then
+            floatBodyPosition:Destroy()
+            floatBodyPosition = nil
+        end
+        return
+    end
+
+    local char = LocalPlayer.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    -- Create or reuse BodyPosition
+    if not floatBodyPosition then
+        floatBodyPosition = Instance.new("BodyPosition", root)
+        floatBodyPosition.MaxForce = Vector3.new(0, math.huge, 0)  -- only vertical force
+        floatBodyPosition.D = 500      -- damping (higher = less bounce)
+        floatBodyPosition.P = 5000     -- proportional (higher = faster response)
+    end
+
+    -- Raycast down to find ground
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    raycastParams.FilterDescendantsInstances = {char}
+    local rayResult = workspace:Raycast(root.Position, Vector3.new(0, -300, 0), raycastParams)
+
+    if rayResult then
+        local targetY = rayResult.Position.Y + SETTINGS.FLOAT_HEIGHT
+        floatBodyPosition.Position = Vector3.new(root.Position.X, targetY, root.Position.Z)
+    else
+        -- No ground found – fallback: hover at current height + a little
+        floatBodyPosition.Position = root.Position + Vector3.new(0, 5, 0)
+    end
+end
+
+RunService.Heartbeat:Connect(updateFloat)
+
+-- [[ KEYBIND HANDLER ]] --
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    local key = input.KeyCode
+    if key == Enum.KeyCode.Unknown then return end
+    local keyName = key.Name
+    
+    if KEYBINDS.LOCK == keyName then
+        SETTINGS.LOCK_ENABLED = not SETTINGS.LOCK_ENABLED
+        if SETTINGS.LOCK_ENABLED then equipBat(); startAutoSwing() else stopAutoSwing() end
+        if extraPanel then buildExtraPanel() end
+    elseif KEYBINDS.DROP == keyName then
+        dropAction()
+    elseif KEYBINDS.AUTOLEFT == keyName then
+        SETTINGS.AUTOLEFT = not SETTINGS.AUTOLEFT
+        if SETTINGS.AUTOLEFT then
+            SETTINGS.AUTORIGHT = false
+            RightPhase = 1
+            if setAutoRightState then setAutoRightState(false) end
+        end
+        LeftPhase = 1
+        if extraPanel then buildExtraPanel() end
+    elseif KEYBINDS.AUTORIGHT == keyName then
+        SETTINGS.AUTORIGHT = not SETTINGS.AUTORIGHT
+        if SETTINGS.AUTORIGHT then
+            SETTINGS.AUTOLEFT = false
+            LeftPhase = 1
+            if setAutoLeftState then setAutoLeftState(false) end
+        end
+        RightPhase = 1
+        if extraPanel then buildExtraPanel() end
+    elseif KEYBINDS.FLOAT == keyName then
+        SETTINGS.FLOAT_ENABLED = not SETTINGS.FLOAT_ENABLED
+        if not SETTINGS.FLOAT_ENABLED and floatBodyPosition then
+            floatBodyPosition:Destroy()
+            floatBodyPosition = nil
+            local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if root then
+                root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z)
             end
         end
+        if extraPanel then buildExtraPanel() end
+    elseif KEYBINDS.TPDOWN == keyName then
+        tpDownAction()
     end
 end)
 
 -- [[ MOVEMENT GUI ]] --
 local MoveGUI = Instance.new("ScreenGui", CoreGui); MoveGUI.Name = "A1_MovementGUI"
-local MoveFrame = Instance.new("Frame", MoveGUI); MoveFrame.Size = UDim2.new(0, 145, 0, 225); MoveFrame.Position = UDim2.new(0, 50, 0.5, -112); MoveFrame.BackgroundColor3 = Color3.fromRGB(5, 15, 30); Instance.new("UICorner", MoveFrame).CornerRadius = UDim.new(0, 10); AddOutline(MoveFrame); MakeDraggable(MoveFrame)
 
-local moveBtns = {}
-local function CreateMoveToggle(text, y, settingKey, extraLogic)
-    local b = Instance.new("TextButton", MoveFrame); b.Size = UDim2.new(1, -20, 0, 35); b.Position = UDim2.new(0, 10, 0, y); b.BackgroundColor3 = Color3.fromRGB(10, 25, 50); b.Text = text .. ": OFF"; b.TextColor3 = Color3.fromRGB(200, 200, 200); b.Font = Enum.Font.GothamBold; b.TextSize = 10; Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6); AddOutline(b); moveBtns[settingKey] = b
-    local active = false
-    local function apply(s)
-        active = s; SETTINGS[settingKey] = s; b.Text = text .. ": " .. (s and "ON" or "OFF"); b.BackgroundColor3 = s and Color3.fromRGB(20, 80, 150) or Color3.fromRGB(10, 25, 50); b.TextColor3 = s and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 200, 200)
-        if extraLogic then extraLogic(s) end
+local MoveFrame = Instance.new("Frame", MoveGUI)
+MoveFrame.Size = UDim2.new(0, 175, 0, 250)
+MoveFrame.Position = UDim2.new(0, 50, 0.5, -125)
+MoveFrame.BackgroundColor3 = Color3.fromRGB(15, 35, 15)
+Instance.new("UICorner", MoveFrame).CornerRadius = UDim.new(0, 10)
+local moveStroke = Instance.new("UIStroke", MoveFrame)
+moveStroke.Color = Color3.fromRGB(60, 80, 60)
+moveStroke.Thickness = 2
+
+if savedPositions["MovementGUI"] then
+    local p = savedPositions["MovementGUI"]
+    MoveFrame.Position = UDim2.new(p.xs, p.xo, p.ys, p.yo)
+end
+
+local function saveMovementGUIPos()
+    savedPositions["MovementGUI"] = {
+        xs = MoveFrame.Position.X.Scale,
+        xo = MoveFrame.Position.X.Offset,
+        ys = MoveFrame.Position.Y.Scale,
+        yo = MoveFrame.Position.Y.Offset
+    }
+    saveConfig()
+end
+
+-- Make MoveFrame draggable
+local dragging, dragInput, dragStart, startPos, moved = false, nil, nil, nil, false
+MoveFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging, moved, dragStart, startPos, dragInput = true, false, input.Position, MoveFrame.Position, input
     end
-    b.MouseButton1Click:Connect(function() apply(not active) end)
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input == dragInput then
+        local delta = input.Position - dragStart
+        if delta.Magnitude > 6 then moved = true end
+        MoveFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input == dragInput then
+        dragging = false
+        if moved then
+            saveMovementGUIPos()
+        end
+    end
+end)
+
+local GridFrame = Instance.new("Frame", MoveFrame)
+GridFrame.Size = UDim2.new(1, -20, 1, -20)
+GridFrame.Position = UDim2.new(0, 10, 0, 10)
+GridFrame.BackgroundTransparency = 1
+
+local Grid = Instance.new("UIGridLayout", GridFrame)
+Grid.CellSize = UDim2.new(0, 72, 0, 72)
+Grid.CellPadding = UDim2.new(0, 10, 0, 10)
+Grid.FillDirection = Enum.FillDirection.Horizontal
+Grid.SortOrder = Enum.SortOrder.LayoutOrder
+
+local setAutoLeftState, setAutoRightState
+
+-- Helper to create a toggle-style button that performs a one‑shot action (no state)
+local function CreateActionToggle(text, action, layoutOrder)
+    local Card = Instance.new("Frame", GridFrame)
+    Card.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+    Card.LayoutOrder = layoutOrder
+    Instance.new("UICorner", Card).CornerRadius = UDim.new(0, 8)
+
+    local Title = Instance.new("TextLabel", Card)
+    Title.Size = UDim2.new(1, 0, 0.4, 0)
+    Title.Position = UDim2.new(0, 0, 0.1, 0)
+    Title.BackgroundTransparency = 1
+    Title.Text = text
+    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = 10
+
+    local ModeText = Instance.new("TextLabel", Card)
+    ModeText.Size = UDim2.new(1, 0, 0.2, 0)
+    ModeText.Position = UDim2.new(0, 0, 0.45, 0)
+    ModeText.BackgroundTransparency = 1
+    ModeText.Text = "ACTION"
+    ModeText.TextColor3 = Color3.fromRGB(150, 150, 150)
+    ModeText.Font = Enum.Font.Gotham
+    ModeText.TextSize = 7
+
+    local OuterCircle = Instance.new("Frame", Card)
+    OuterCircle.Size = UDim2.new(0, 14, 0, 14)
+    OuterCircle.Position = UDim2.new(0.5, -7, 0.7, 0)
+    OuterCircle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    OuterCircle.BackgroundTransparency = 1
+    Instance.new("UICorner", OuterCircle).CornerRadius = UDim.new(1, 0)
+    local CircleStroke = Instance.new("UIStroke", OuterCircle)
+    CircleStroke.Color = Color3.fromRGB(255, 255, 255)
+    CircleStroke.Thickness = 1.5
+
+    local InnerDot = Instance.new("Frame", OuterCircle)
+    InnerDot.Size = UDim2.new(0, 6, 0, 6)
+    InnerDot.Position = UDim2.new(0.5, -3, 0.5, -3)
+    InnerDot.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    InnerDot.Visible = false
+    Instance.new("UICorner", InnerDot).CornerRadius = UDim.new(1, 0)
+
+    local Btn = Instance.new("TextButton", Card)
+    Btn.Size = UDim2.new(1, 0, 1, 0)
+    Btn.BackgroundTransparency = 1
+    Btn.Text = ""
+
+    Btn.MouseButton1Click:Connect(function()
+        InnerDot.Visible = true
+        task.wait(0.1)
+        InnerDot.Visible = false
+        action()
+    end)
+    return Btn
+end
+
+-- Helper for normal toggle buttons
+local function CreateMoveToggle(text, settingKey, extraLogic, layoutOrder)
+    local Card = Instance.new("Frame", GridFrame)
+    Card.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+    Card.LayoutOrder = layoutOrder
+    Instance.new("UICorner", Card).CornerRadius = UDim.new(0, 8)
+
+    local Title = Instance.new("TextLabel", Card)
+    Title.Size = UDim2.new(1, 0, 0.4, 0)
+    Title.Position = UDim2.new(0, 0, 0.1, 0)
+    Title.BackgroundTransparency = 1
+    Title.Text = text
+    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = 10
+
+    local ModeText = Instance.new("TextLabel", Card)
+    ModeText.Size = UDim2.new(1, 0, 0.2, 0)
+    ModeText.Position = UDim2.new(0, 0, 0.45, 0)
+    ModeText.BackgroundTransparency = 1
+    ModeText.Text = "MODE"
+    ModeText.TextColor3 = Color3.fromRGB(150, 150, 150)
+    ModeText.Font = Enum.Font.Gotham
+    ModeText.TextSize = 7
+
+    local OuterCircle = Instance.new("Frame", Card)
+    OuterCircle.Size = UDim2.new(0, 14, 0, 14)
+    OuterCircle.Position = UDim2.new(0.5, -7, 0.7, 0)
+    OuterCircle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    OuterCircle.BackgroundTransparency = 1
+    Instance.new("UICorner", OuterCircle).CornerRadius = UDim.new(1, 0)
+    local CircleStroke = Instance.new("UIStroke", OuterCircle)
+    CircleStroke.Color = Color3.fromRGB(255, 255, 255)
+    CircleStroke.Thickness = 1.5
+
+    local InnerDot = Instance.new("Frame", OuterCircle)
+    InnerDot.Size = UDim2.new(0, 6, 0, 6)
+    InnerDot.Position = UDim2.new(0.5, -3, 0.5, -3)
+    InnerDot.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    InnerDot.Visible = false
+    Instance.new("UICorner", InnerDot).CornerRadius = UDim.new(1, 0)
+
+    local Btn = Instance.new("TextButton", Card)
+    Btn.Size = UDim2.new(1, 0, 1, 0)
+    Btn.BackgroundTransparency = 1
+    Btn.Text = ""
+
+    local active = SETTINGS[settingKey] or false
+    InnerDot.Visible = active
+
+    local function apply(s)
+        active = s
+        SETTINGS[settingKey] = s
+        InnerDot.Visible = s
+        if extraLogic then extraLogic(s) end
+        saveConfig()
+    end
+
+    Btn.MouseButton1Click:Connect(function() apply(not active) end)
     return apply
 end
 
-local setLockState = CreateMoveToggle("LOCK ON", 15, "LOCK_ENABLED", function(on) if on then equipBat(); startAutoSwing() else stopAutoSwing() end end)
-local setDropState = CreateMoveToggle("DROP", 60, "DROP", function(on) 
-    if on then
-        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if hrp then hrp.AssemblyLinearVelocity = Vector3.new(0, 115, 0); task.wait(0.2); hrp.AssemblyLinearVelocity = Vector3.new(0, -605, 0) end
-        task.wait(0.1); SETTINGS.DROP = false; moveBtns["DROP"].Text = "DROP: OFF"; moveBtns["DROP"].BackgroundColor3 = Color3.fromRGB(10, 25, 50)
+-- Create toggles with custom layout order
+-- Layout order: 1 top left, 2 top right, 3 middle left, 4 middle right, 5 bottom left, 6 bottom right
+local setLockState = CreateMoveToggle("LOCK ON", "LOCK_ENABLED", function(on) if on then equipBat(); startAutoSwing() else stopAutoSwing() end end, 1)
+CreateActionToggle("DROP", dropAction, 2)
+setAutoLeftState = CreateMoveToggle("AUTO LEFT", "AUTOLEFT", function(on) 
+    if on then 
+        setAutoRightState(false)
+        RightPhase = 1
     end
-end)
-local setAutoLeftState, setAutoRightState
-setAutoLeftState = CreateMoveToggle("AUTO LEFT", 105, "AUTOLEFT", function(on) if on then setAutoRightState(false); RightPhase = 1 end; LeftPhase = 1 end)
-setAutoRightState = CreateMoveToggle("AUTO RIGHT", 150, "AUTORIGHT", function(on) if on then setAutoLeftState(false); LeftPhase = 1 end; RightPhase = 1 end)
+    LeftPhase = 1
+end, 3)
+setAutoRightState = CreateMoveToggle("AUTO RIGHT", "AUTORIGHT", function(on) 
+    if on then 
+        setAutoLeftState(false)
+        LeftPhase = 1
+    end
+    RightPhase = 1
+end, 4)
+local setFloatState = CreateMoveToggle("FLOAT", "FLOAT_ENABLED", function(on)
+    if not on and floatBodyPosition then
+        floatBodyPosition:Destroy()
+        floatBodyPosition = nil
+        local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if root then
+            root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z)
+        end
+    end
+end, 5)
+CreateActionToggle("TP DOWN", tpDownAction, 6)
 
 -- [[ TP BUTTONS ]] --
 local TpHUD = Instance.new("TextButton", HUDScreen); TpHUD.Size = UDim2.new(0, 110, 0, 38); TpHUD.Position = resolvePosition("Tp"); TpHUD.BackgroundColor3 = Color3.fromRGB(10, 25, 50); TpHUD.Font = Enum.Font.GothamBold; TpHUD.TextSize = 11; Instance.new("UICorner", TpHUD).CornerRadius = UDim.new(0, 8); AddOutline(TpHUD); allButtons["Tp"] = TpHUD
@@ -402,7 +742,7 @@ local ResetTpBtn = Instance.new("TextButton", HUDScreen); ResetTpBtn.Size = UDim
 local TpAutoBtn = Instance.new("TextButton", HUDScreen); TpAutoBtn.Size = UDim2.new(0, 100, 0, 28); TpAutoBtn.Position = resolvePosition("TpAuto"); TpAutoBtn.BackgroundColor3 = Color3.fromRGB(10, 25, 50); TpAutoBtn.Text = "TP AUTO\nOFF"; TpAutoBtn.TextColor3 = Color3.fromRGB(200, 200, 200); TpAutoBtn.Font = Enum.Font.GothamBold; TpAutoBtn.TextSize = 11; Instance.new("UICorner", TpAutoBtn).CornerRadius = UDim.new(0, 8); AddOutline(TpAutoBtn); allButtons["TpAuto"] = TpAutoBtn
 MakeDraggable(TpAutoBtn, function() tpAutoEnabled = not tpAutoEnabled; TpAutoBtn.Text = "TP AUTO\n" .. (tpAutoEnabled and "ON" or "OFF") end)
 
--- [[ MENU ]] --
+-- [[ MENUS (MAIN & EXTRAS) ]] --
 local menuOpen, menuPanel = false, nil
 local MenuBtn = Instance.new("TextButton", HUDScreen); MenuBtn.Size = UDim2.new(0, 110, 0, 38); MenuBtn.Position = resolvePosition("MenuBtn"); MenuBtn.BackgroundColor3 = Color3.fromRGB(10, 25, 50); MenuBtn.Text = "☰ MENU"; MenuBtn.TextColor3 = Color3.fromRGB(200, 200, 200); MenuBtn.Font = Enum.Font.GothamBold; MenuBtn.TextSize = 12; Instance.new("UICorner", MenuBtn).CornerRadius = UDim.new(0, 8); AddOutline(MenuBtn); allButtons["MenuBtn"] = MenuBtn
 
@@ -427,10 +767,151 @@ local function buildMenuPanel()
     MakeInputRow("Speed Value:", SETTINGS.TARGET_SPEED, function(val) SETTINGS.TARGET_SPEED = val end)
     MakeInputRow("Steal Speed:", SETTINGS.STEAL_SPEED, function(val) SETTINGS.STEAL_SPEED = val end)
     MakeMenuToggle("UNWALK", SETTINGS.UNWALK, function(on) SETTINGS.UNWALK = on end)
+    MakeMenuToggle("SPAM", SETTINGS.SPAM_ENABLED, function(on) SETTINGS.SPAM_ENABLED = on end)
+    MakeInputRow("Float Height:", SETTINGS.FLOAT_HEIGHT, function(val) SETTINGS.FLOAT_HEIGHT = val; saveConfig() end)
     panel.Size = UDim2.new(0, 220, 0, yOff + 12)
 end
-
 MakeDraggable(MenuBtn, function() menuOpen = not menuOpen; if menuOpen then buildMenuPanel() else if menuPanel then menuPanel:Destroy(); menuPanel = nil end end end)
+
+-- EXTRA MENU with scrolling and smaller size --
+local extraOpen, extraPanel = false, nil
+local ExtraBtn = Instance.new("TextButton", HUDScreen); ExtraBtn.Size = UDim2.new(0, 110, 0, 38); ExtraBtn.Position = resolvePosition("ExtraBtn"); ExtraBtn.BackgroundColor3 = Color3.fromRGB(10, 25, 50); ExtraBtn.Text = "★ EXTRAS"; ExtraBtn.TextColor3 = Color3.fromRGB(200, 200, 200); ExtraBtn.Font = Enum.Font.GothamBold; ExtraBtn.TextSize = 12; Instance.new("UICorner", ExtraBtn).CornerRadius = UDim.new(0, 8); AddOutline(ExtraBtn); allButtons["ExtraBtn"] = ExtraBtn
+
+local function getFriendlyKeyName(keyName)
+    local mapping = {
+        ButtonA = "A", ButtonB = "B", ButtonX = "X", ButtonY = "Y",
+        ButtonR1 = "RB", ButtonL1 = "LB", ButtonR2 = "RT", ButtonL2 = "LT",
+        ButtonR3 = "R3", ButtonL3 = "L3", ButtonStart = "Start", ButtonSelect = "Select",
+        Up = "Up", Down = "Down", Left = "Left", Right = "Right"
+    }
+    return mapping[keyName] or keyName
+end
+
+local function buildExtraPanel()
+    if extraPanel then extraPanel:Destroy(); extraPanel = nil end
+    local panelGui = Instance.new("ScreenGui", CoreGui); panelGui.Name = "A1_ExtraMenu"; extraPanel = panelGui
+    local panel = Instance.new("Frame", panelGui)
+    panel.Size = UDim2.new(0, 280, 0, 380)
+    panel.Position = UDim2.new(0.5, -140, 0.5, -190)
+    panel.BackgroundColor3 = Color3.fromRGB(5, 15, 30)
+    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 8)
+    AddOutline(panel)
+    MakeDraggable(panel)
+
+    local scroll = Instance.new("ScrollingFrame", panel)
+    scroll.Size = UDim2.new(1, -12, 1, -12)
+    scroll.Position = UDim2.new(0, 6, 0, 6)
+    scroll.BackgroundTransparency = 1
+    scroll.ScrollBarThickness = 8
+    scroll.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 100)
+    scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+
+    local list = Instance.new("UIListLayout", scroll)
+    list.Padding = UDim.new(0, 8)
+    list.SortOrder = Enum.SortOrder.LayoutOrder
+
+    local function MakeExtraToggleWithKeybind(labelText, settingKey, bindKey)
+        local row = Instance.new("Frame", scroll)
+        row.Size = UDim2.new(1, -8, 0, 46)
+        row.BackgroundTransparency = 1
+
+        local toggleBtn = Instance.new("TextButton", row)
+        toggleBtn.Size = UDim2.new(0, 150, 0, 38)
+        toggleBtn.Position = UDim2.new(0, 0, 0, 4)
+        toggleBtn.BackgroundColor3 = SETTINGS[settingKey] and Color3.fromRGB(20, 80, 150) or Color3.fromRGB(10, 25, 50)
+        toggleBtn.Text = labelText .. "\n" .. (SETTINGS[settingKey] and "ON" or "OFF")
+        toggleBtn.TextColor3 = SETTINGS[settingKey] and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 200, 200)
+        toggleBtn.Font = Enum.Font.GothamBold
+        toggleBtn.TextSize = 11
+        Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 8)
+        AddOutline(toggleBtn)
+
+        local keybindBox = Instance.new("TextBox", row)
+        keybindBox.Size = UDim2.new(0, 100, 0, 28)
+        keybindBox.Position = UDim2.new(1, -110, 0, 9)
+        keybindBox.BackgroundColor3 = Color3.fromRGB(10, 25, 50)
+        local currentBind = KEYBINDS[bindKey]
+        keybindBox.Text = (currentBind and getFriendlyKeyName(currentBind)) or "None"
+        keybindBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+        keybindBox.Font = Enum.Font.GothamBold
+        keybindBox.TextSize = 11
+        Instance.new("UICorner", keybindBox).CornerRadius = UDim.new(0, 6)
+        AddOutline(keybindBox)
+
+        local capturing = false
+        keybindBox.Focused:Connect(function()
+            capturing = true
+            keybindBox.Text = "..."
+        end)
+        local connection
+        connection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+            if not capturing then return end
+            if gameProcessed then return end
+            local key = input.KeyCode
+            if key == Enum.KeyCode.Unknown then return end
+            local keyName = key.Name
+            KEYBINDS[bindKey] = keyName
+            keybindBox.Text = getFriendlyKeyName(keyName)
+            capturing = false
+            keybindBox:ReleaseFocus()
+            saveConfig()
+            connection:Disconnect()
+        end)
+
+        toggleBtn.MouseButton1Click:Connect(function()
+            if settingKey == "DROP" then
+                dropAction()
+            elseif settingKey == "TP_DOWN" then
+                tpDownAction()
+            else
+                SETTINGS[settingKey] = not SETTINGS[settingKey]
+                toggleBtn.Text = labelText .. "\n" .. (SETTINGS[settingKey] and "ON" or "OFF")
+                toggleBtn.BackgroundColor3 = SETTINGS[settingKey] and Color3.fromRGB(20, 80, 150) or Color3.fromRGB(10, 25, 50)
+                toggleBtn.TextColor3 = SETTINGS[settingKey] and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 200, 200)
+                if settingKey == "LOCK_ENABLED" then
+                    if SETTINGS.LOCK_ENABLED then equipBat(); startAutoSwing() else stopAutoSwing() end
+                elseif settingKey == "AUTOLEFT" then
+                    if SETTINGS.AUTOLEFT then
+                        SETTINGS.AUTORIGHT = false
+                        RightPhase = 1
+                        if setAutoRightState then setAutoRightState(false) end
+                    end
+                    LeftPhase = 1
+                elseif settingKey == "AUTORIGHT" then
+                    if SETTINGS.AUTORIGHT then
+                        SETTINGS.AUTOLEFT = false
+                        LeftPhase = 1
+                        if setAutoLeftState then setAutoLeftState(false) end
+                    end
+                    RightPhase = 1
+                elseif settingKey == "FLOAT_ENABLED" then
+                    if not SETTINGS.FLOAT_ENABLED and floatBodyPosition then
+                        floatBodyPosition:Destroy()
+                        floatBodyPosition = nil
+                        local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                        if root then
+                            root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z)
+                        end
+                    end
+                end
+            end
+            saveConfig()
+        end)
+        return row
+    end
+
+    MakeExtraToggleWithKeybind("AUTO GRAB", "ENABLED", nil)
+    MakeExtraToggleWithKeybind("SPEED", "SPEED_ENABLED", nil)
+    MakeExtraToggleWithKeybind("FLOAT", "FLOAT_ENABLED", "FLOAT")
+    MakeExtraToggleWithKeybind("LOCK ON", "LOCK_ENABLED", "LOCK")
+    MakeExtraToggleWithKeybind("DROP", "DROP", "DROP")
+    MakeExtraToggleWithKeybind("AUTO L", "AUTOLEFT", "AUTOLEFT")
+    MakeExtraToggleWithKeybind("AUTO R", "AUTORIGHT", "AUTORIGHT")
+    MakeExtraToggleWithKeybind("TP DOWN", "TP_DOWN", "TPDOWN")
+end
+
+MakeDraggable(ExtraBtn, function() extraOpen = not extraOpen; if extraOpen then buildExtraPanel() else if extraPanel then extraPanel:Destroy(); extraPanel = nil end end end)
 
 -- [[ MAIN LOOP ]] --
 RunService.Heartbeat:Connect(function()
@@ -455,7 +936,7 @@ RunService.Heartbeat:Connect(function()
         end
     elseif SETTINGS.SPEED_ENABLED then
         if hum.MoveDirection.Magnitude > 0 then
-            local activeSpeed = LocalPlayer:GetAttribute("Stealing") and SETTINGS.STEAL_SPEED or SETTINGS.TARGET_SPEED
+            local activeSpeed = (SETTINGS.CARRY_MODE and SETTINGS.STEAL_SPEED) or SETTINGS.TARGET_SPEED
             hrp.Velocity = Vector3.new(hum.MoveDirection.X * activeSpeed, hrp.Velocity.Y, hum.MoveDirection.Z * activeSpeed)
         end
     end
